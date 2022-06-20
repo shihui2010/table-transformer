@@ -1,7 +1,7 @@
 # PubTables-1M
 
 This repository contains code and links to data for the papers:
-- ["PubTables-1M: Towards comprehensive table extraction from unstructured documents"](https://openaccess.thecvf.com/content/CVPR2022/html/Smock_PubTables-1M_Towards_Comprehensive_Table_Extraction_From_Unstructured_Documents_CVPR_2022_paper.html)
+- ["PubTables-1M: Towards comprehensive table extraction from unstructured documents"](https://arxiv.org/pdf/2110.00061.pdf)
 - ["GriTS: Grid table similarity metric for table structure recognition"](https://arxiv.org/pdf/2203.12555.pdf)
 
 *Note: Updates to the code and papers (and documentation) are currently ongoing and we will announce when each of these is ready for a stable release.*
@@ -11,7 +11,7 @@ The goal of PubTables-1M is to create a large, detailed, high-quality dataset fo
 ![table_extraction_v2](https://user-images.githubusercontent.com/10793386/139559159-cd23c972-8731-48ed-91df-f3f27e9f4d79.jpg)
 
 It contains:
-- 575,305 annotated document pages containing tables for table detection.
+- 460,589 annotated document pages containing tables for table detection.
 - 947,642 fully annotated tables including text content and complete location (bounding box) information for table structure recognition and functional analysis.
 - Full bounding boxes in both image and PDF coordinates for all table rows, columns, and cells (including blank cells), as well as other annotated structures such as column headers and projected row headers.
 - Rendered images of all tables and pages.
@@ -96,26 +96,15 @@ We provide the pre-trained models for table detection and table structure recogn
   </tbody>
 </table>
 
-## Training and Evaluation Data
+## Getting the Data
 [PubTables-1M](https://msropendata.com/datasets/505fcbe3-1383-42b1-913a-f651b8b712d3) is available for download from [Microsoft Research Open Data](https://msropendata.com/).
 
 It comes in 5 tar.gz files:
-- PubTables-1M-Image_Page_Detection_PASCAL_VOC.tar.gz: Training and evaluation data for the detection model
-  - ```/images```: 575,305 JPG files; one file for each page image
-  - ```/train```: 460,589 XML files containing bounding boxes in PASCAL VOC format
-  - ```/test```: 57,125 XML files containing bounding boxes in PASCAL VOC format
-  - ```/val```: 57,591 XML files containing bounding boxes in PASCAL VOC format
-- PubTables-1M-Image_Page_Words_JSON.tar.gz: Bounding boxes and text content for all of the words in each cropped table image
-  - One JSON file per page image (plus some extra unused files)
-- PubTables-1M-Image_Table_Structure_PASCAL_VOC.tar.gz: Training and evaluation data for the structure (and functional analysis) model
-  - ```/images```: 947,642 JPG files; one file for each page image
-  - ```/train```: 758,849 XML files containing bounding boxes in PASCAL VOC format
-  - ```/test```: 93,834 XML files containing bounding boxes in PASCAL VOC format
-  - ```/val```: 94,959 XML files containing bounding boxes in PASCAL VOC format
-- PubTables-1M-Image_Table_Words_JSON.tar.gz: Bounding boxes and text content for all of the words in each cropped table image
-  - One JSON file per cropped table image (plus some extra unused files)
-- PubTables-1M-PDF_Annotations_JSON.tar.gz: Detailed annotations for all of the tables appearing in the source PubMed PDFs. All annotations are in PDF coordinates.
-  - 401,733 JSON files; one file per source PDF
+- PubTables-1M-Image_Page_Detection_PASCAL_VOC.tar.gz
+- PubTables-1M-Image_Page_Words_JSON.tar.gz
+- PubTables-1M-Image_Table_Structure_PASCAL_VOC.tar.gz
+- PubTables-1M-Image_Table_Words_JSON.tar.gz
+- PubTables-1M-PDF_Annotations_JSON.tar.gz
 
 To download from the command line:
 1. Visit the [dataset home page](https://msropendata.com/datasets/505fcbe3-1383-42b1-913a-f651b8b712d3) with a web browser and click Download in the top left corner. This will create a link to download the dataset from Azure with a unique access token for you that looks like `https://msropendataset01.blob.core.windows.net/pubtables1m?[SAS_TOKEN_HERE]`.
@@ -157,8 +146,11 @@ python main.py --data_type structure --config_file structure_config.json --data_
 ```
 
 ##  Evaluation
-The evaluation code computes standard object detection metrics (AP, AP50, etc.) for both the detection model and the structure model.
-When running evaluation for the structure model it also computes grid table similarity (GriTS) metrics for table structure recognition.
+Evaluation on the test data currently operates in two different modes.
+The first mode ("eval") computes standard metrics for object detection (AP, AP50, etc.).
+This mode applies to either the detection model or the structure recognition model.
+
+The second mode ("grits") computes the grid table similarity (GriTS) metrics for table structure recognition.
 GriTS is a measure of table cell correctness and is defined as the average correctness of each cell averaged over all tables.
 GriTS can measure the correctness of predicted cells based on:  1. cell topology alone, 2. cell topology and the reported bounding box location of each cell, or 3. cell topology and the reported text content of each cell.
 For more details on GriTS, please see our papers.
@@ -166,34 +158,31 @@ For more details on GriTS, please see our papers.
 To compute object detection metrics for the detection model:
 
 ```
-python main.py --mode eval --data_type detection --config_file detection_config.json --data_root_dir /path/to/pascal_voc_detection_data --model_load_path /path/to/detection_model  
+python main.py --mode eval --data_type detection --config_file detection_config.json --data_root_dir /path/to/detection_data --model_load_path /path/to/detection_model  
 ```
 
-To compute object detection and GriTS metrics for the structure recognition model:
+To compute object detection metrics for the structure recognition model:
 
 ```
-python main.py --mode eval --data_type structure --config_file structure_config.json --data_root_dir /path/to/pascal_voc_structure_data --model_load_path /path/to/structure_model --table_words_dir /path/to/json_table_words_data
-```  
+python main.py --mode eval --data_type structure --config_file structure_config.json --data_root_dir /path/to/structure_data --model_load_path /path/to/structure_model
+```
 
-Optionally you can add flags for things like controlling parallelization, saving detailed metrics, and saving visualizations:\
-```--device cpu```: Change the default device from cuda to cpu.\
-```--batch_size 4```: Control the batch size to use during the forward pass of the model.\
-```--eval_pool_size 4```: Control the worker pool size for CPU parallelization during GriTS metric computation.\
-```--eval_step 2```: Control the number of batches of processed input data to accumulate before passing all samples to the parallelized worker pool for GriTS metric computation.\
-```--debug```: Create and save visualizations of the model inference. For each input image "PMC1234567_table_0.jpg", this will save two visualizations: "PMC1234567_table_0_bboxes.jpg" containing the bounding boxes output by the model, and "PMC1234567_table_0_cells.jpg" containing the final table cell bounding boxes after post-processing. By default these are saved to a new folder "debug" in the current directory.\
-``` --debug_save_dir /path/to/folder```: Specify the folder to save visualizations to.\
-```--test_max_size 500```: Run evaluation on a randomly sampled subset of the data. Useful for quick verifications and checks.
+To compute the GriTS metrics for the structure recognition model:
+
+```
+python main.py --mode grits --data_type structure --config_file structure_config.json --data_root_dir /path/to/structure_data --table_words_dir /path/to/table_words_data --model_load_path /path/to/structure_model --metrics_save_filepath /path/to/metrics_log_file
+```
+
+Detailed instance-level metrics for GriTS are saved to the log file specified in ```--metrics_save_filepath```.
 
 ## Citing
 Our work can be cited using:
 ```
-@inproceedings{smock2022pubtables,
-  title={Pub{T}ables-1{M}: Towards comprehensive table extraction from unstructured documents},
+@article{smock2021pubtables1m,
   author={Smock, Brandon and Pesala, Rohith and Abraham, Robin},
-  booktitle={Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
-  pages={4634-4642},
-  year={2022},
-  month={June}
+  title={Pub{T}ables-1{M}: Towards comprehensive table extraction from unstructured documents},
+  journal={arXiv preprint arXiv:2110.00061},
+  year={2021}
 }
 ```
 ```

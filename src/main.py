@@ -17,9 +17,8 @@ from models import build_model
 import util.misc as utils
 import datasets.transforms as R
 
-import table_datasets as TD
-from table_datasets import PDFTablesDataset
-from eval import eval_coco
+from table_datasets import PDFTablesDataset, TightAnnotationCrop, RandomPercentageCrop, RandomErasingWithTarget, ToPILImageWithTarget, RandomMaxResize, RandomCrop
+from eval import eval_coco, eval_tsr
 
 
 def get_args():
@@ -43,15 +42,12 @@ def get_args():
     parser.add_argument('--metrics_save_filepath',
                         help='Filepath to save grits outputs',
                         default='')
-    parser.add_argument('--debug_save_dir',
-                        help='Filepath to save visualizations',
-                        default='debug')                        
     parser.add_argument('--table_words_dir',
                         help="Folder containg the bboxes of table words")
     parser.add_argument('--mode',
-                        choices=['train', 'eval'],
+                        choices=['train', 'eval', 'grits', 'grits-all'],
                         default='train',
-                        help="Modes: training (train) and evaluation (eval)")
+                        help="Toggle between different modes")
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--lr_drop', default=1, type=int)
@@ -60,29 +56,84 @@ def get_args():
     parser.add_argument('--checkpoint_freq', default=1, type=int)
     parser.add_argument('--batch_size', default=2, type=int)
     parser.add_argument('--num_workers', default=2, type=int)
-    parser.add_argument('--train_max_size', type=int)
-    parser.add_argument('--val_max_size', type=int)
-    parser.add_argument('--test_max_size', type=int)
-    parser.add_argument('--eval_pool_size', type=int, default=1)
-    parser.add_argument('--eval_step', type=int, default=1)
 
     return parser.parse_args()
 
 
+def make_structure_coco_transforms(image_set):
+    """
+    returns the appropriate transforms for structure recognition.
+    """
+    normalize = R.Compose([
+        R.ToTensor(),
+        R.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    random_erasing = R.Compose([
+        R.ToTensor(),
+        RandomErasingWithTarget(p=0.5,
+                                scale=(0.003, 0.03),
+                                ratio=(0.1, 0.3),
+                                value='random'),
+        RandomErasingWithTarget(p=0.5,
+                                scale=(0.003, 0.03),
+                                ratio=(0.3, 1),
+                                value='random'),
+        ToPILImageWithTarget()
+    ])
+
+    if image_set == 'train':
+        return R.Compose([
+            RandomCrop(1, 20, 20, 20, 20),
+            RandomMaxResize(900, 1100), random_erasing, normalize
+        ])
+
+    if image_set == 'val':
+        return R.Compose([RandomMaxResize(1000, 1000), normalize])
+
+    raise ValueError(f'unknown {image_set}')
+
+
+def make_detection_coco_transforms(image_set):
+    """
+    returns the appropriate transforms for table detection.
+    """
+    normalize = R.Compose([
+        R.ToTensor(),
+        R.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    ])
+
+    if image_set == 'train':
+        return R.Compose([
+            R.RandomSelect(TightAnnotationCrop([0, 1], 100, 150, 100, 150),
+                           RandomPercentageCrop(1, 0.1, 0.1, 0.1, 0.1),
+                           p=0.2),
+            RandomMaxResize(704, 896), normalize
+        ])
+
+    if image_set == 'val':
+        return R.Compose([RandomMaxResize(800, 800), normalize])
+
+    raise ValueError(f'unknown {image_set}')
+
+
 def get_transform(data_type, image_set):
     if data_type == 'structure':
-        return TD.get_structure_transform(image_set)
+        return make_structure_coco_transforms(image_set)
     else:
-        return TD.get_detection_transform(image_set)
+        return make_detection_coco_transforms(image_set)
 
 
 def get_class_map(data_type):
     if data_type == 'structure':
         class_map = {
             'table': 0,
+            'column': 1,
             'table column': 1,
             'table row': 2,
+            'row': 2,
             'table column header': 3,
+            'header row': 3,
             'table projected row header': 4,
             'table spanning cell': 5,
             'no object': 6
@@ -106,20 +157,16 @@ def get_data(args):
             os.path.join(args.data_root_dir, "train"),
             get_transform(args.data_type, "train"),
             do_crop=False,
-            max_size=args.train_max_size,
-            include_eval=False,
             max_neg=0,
             make_coco=False,
-            image_extension=".jpg",
+            image_extension=".png",
             xml_fileset="train_filelist.txt",
             class_map=class_map)
         dataset_val = PDFTablesDataset(os.path.join(args.data_root_dir, "val"),
                                        get_transform(args.data_type, "val"),
                                        do_crop=False,
-                                       max_size=args.val_max_size,
-                                       include_eval=False,
                                        make_coco=True,
-                                       image_extension=".jpg",
+                                       image_extension=".png",
                                        xml_fileset="val_filelist.txt",
                                        class_map=class_map)
 
@@ -149,10 +196,8 @@ def get_data(args):
                                                      "test"),
                                         get_transform(args.data_type, "val"),
                                         do_crop=False,
-                                        max_size=args.test_max_size,
                                         make_coco=True,
-                                        include_eval=True,
-                                        image_extension=".jpg",
+                                        image_extension=".png",
                                         xml_fileset="test_filelist.txt",
                                         class_map=class_map)
         sampler_test = torch.utils.data.SequentialSampler(dataset_test)
@@ -170,9 +215,8 @@ def get_data(args):
                                                      "test"),
                                         RandomMaxResize(1000, 1000),
                                         include_original=True,
-                                        max_size=args.max_test_size,
                                         make_coco=False,
-                                        image_extension=".jpg",
+                                        image_extension=".png",
                                         xml_fileset="test_filelist.txt",
                                         class_map=class_map)
         return dataset_test
@@ -307,11 +351,6 @@ def main():
     print(args.__dict__)
     print('-' * 100)
 
-    # Check for debug mode
-    if args.mode == 'eval' and args.debug:
-        print("Running evaluation/inference in DEBUG mode, processing will take longer. Saving output to: {}.".format(args.debug_save_dir))
-        os.makedirs(args.debug_save_dir, exist_ok=True)
-
     # fix the seed for reproducibility
     seed = args.seed + utils.get_rank()
     torch.manual_seed(seed)
@@ -326,7 +365,11 @@ def main():
         train(args, model, criterion, postprocessors, device)
     elif args.mode == "eval":
         data_loader_test, dataset_test = get_data(args)
-        eval_coco(args, model, criterion, postprocessors, data_loader_test, dataset_test, device)
+        eval_coco(model, criterion, postprocessors, data_loader_test, dataset_test, device)
+    elif args.mode == "grits" or args.mode == 'grits-all':
+        assert args.data_type == "structure", "GriTS is only applicable to structure recognition"
+        dataset_test = get_data(args)
+        eval_tsr(args, model, dataset_test, device)
 
 
 if __name__ == "__main__":
